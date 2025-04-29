@@ -1,9 +1,14 @@
-import { Text, View, StyleSheet, Button, FlatList } from 'react-native';
+//index.tsx
+import { Text, View, StyleSheet, Button, FlatList, Modal, TouchableOpacity, Alert, TextInput } from 'react-native';
 import { useEffect, useState } from 'react';
+
 import { CameraView, useCameraPermissions, BarcodeScanningResult } from 'expo-camera';
 import { StatusBar } from 'expo-status-bar';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Importe as funções do banco de dados de bancos
+import { initializeBanksDatabase, isBankKnown, addNewBank, getBankName } from './bankDatabase';
 
 
 // Updated BarcodeResult interface with more detailed boleto properties
@@ -32,11 +37,18 @@ export default function Index() {
   const [permission, requestPermission] = useCameraPermissions();
   const [results, setResults] = useState<BarcodeResult[]>([]);
   const [isScanning, setIsScanning] = useState(true);
-  // New state to track all boletos scanned
   const [boletosList, setBoletosList] = useState<BarcodeResult['boletoDetails'][]>([]);
+  
+  // Novas variáveis de estado para o modal de cadastro de banco
+  const [showBankModal, setShowBankModal] = useState(false);
+  const [pendingBoleto, setPendingBoleto] = useState<BarcodeResult | null>(null);
+  const [newBankName, setNewBankName] = useState('');
+  const [currentBankCode, setCurrentBankCode] = useState('');
 
   useEffect(() => {
     requestPermission();
+    // Inicializar o banco de dados de bancos conhecidos
+    initializeBanksDatabase();
   }, []);
 
 // Função para calcular a data de vencimento a partir do fator de vencimento
@@ -45,19 +57,19 @@ const calcularDataVencimento = (fatorVencimento: string): string => {
     const fator = parseInt(fatorVencimento, 10);
     if (isNaN(fator)) return 'Data inválida';
     
-    // Verifica se o fator é referente à nova regra (a partir de 22/02/2025)
-    if (fator >= 1000) {
-      // Nova data base: 22/02/2025 (quando o fator foi reiniciado para 1000)
-      const novaDataBase = new Date(2025, 1, 22); // Mês é 0-indexed (fevereiro = 1)
-      const dataVencimento = new Date(novaDataBase);
-      dataVencimento.setDate(novaDataBase.getDate() + (fator - 1000));
-      
-      return dataVencimento.toLocaleDateString('pt-BR');
-    } else {
+    // Verifica se o fator é maior que 5000 para usar o método padrão
+    if (fator > 5000) {
       // Regra antiga - Data base: 07/10/1997
       const dataBase = new Date(1997, 9, 7);
       const dataVencimento = new Date(dataBase);
       dataVencimento.setDate(dataBase.getDate() + fator);
+      
+      return dataVencimento.toLocaleDateString('pt-BR');
+    } else {
+      // Método novo - Nova data base: 22/02/2025 (quando o fator foi reiniciado para 1000)
+      const novaDataBase = new Date(2025, 1, 22); // Mês é 0-indexed (fevereiro = 1)
+      const dataVencimento = new Date(novaDataBase);
+      dataVencimento.setDate(novaDataBase.getDate() + (fator - 1000));
       
       return dataVencimento.toLocaleDateString('pt-BR');
     }
@@ -105,7 +117,8 @@ const calcularDataVencimento = (fatorVencimento: string): string => {
     return codeTypes[typeStr] || typeStr;
   };
 
-  const handleBarCodeScanned = (scanningResult: BarcodeScanningResult) => {
+  // Modificar a função handleBarCodeScanned para verificar bancos conhecidos
+  const handleBarCodeScanned = async (scanningResult: BarcodeScanningResult) => {
     if (!isScanning) return;
     
     console.log("Resultado do scan:", JSON.stringify(scanningResult));
@@ -128,7 +141,7 @@ const calcularDataVencimento = (fatorVencimento: string): string => {
       console.error("Erro ao processar resultado do scanner:", error);
       data = 'Erro na leitura';
       type = 'erro';
-      return; // Saia da função se houver erro grave
+      return;
     }
     
     // Remove caracteres não numéricos (pontos, espaços)
@@ -148,75 +161,176 @@ const calcularDataVencimento = (fatorVencimento: string): string => {
       };
 
       if (rawData.length === 47) {
-        // Já está no formato linha digitável (apenas formata)
+        // Extração para linha digitável
         linhaDigitavelFormatada = `${rawData.substring(0,5)}.${rawData.substring(5,10)} ` +
                                 `${rawData.substring(10,15)}.${rawData.substring(15,21)} ` +
                                 `${rawData.substring(21,26)}.${rawData.substring(26,32)} ` +
                                 `${rawData.substring(32,33)} ${rawData.substring(33,47)}`;
         
-        // Extrair informações da linha digitável
         boletoDetails.linhaDigitavel = linhaDigitavelFormatada;
         boletoDetails.codigoBanco = rawData.substring(0, 3);
-        // Outros campos podem variar dependendo do banco
-        const valorPossivelPos = 37; // Posição aproximada - pode variar
+        
+        const valorPossivelPos = 37;
         if (valorPossivelPos + 10 <= rawData.length) {
           boletoDetails.valor = extrairValorBoleto(rawData.substring(valorPossivelPos, valorPossivelPos + 10));
         }
         
       } else if (rawData.length === 44) {
-        // Código de barras
+        // Extração para código de barras
         boletoDetails.codigoBanco = rawData.substring(0, 3);
         boletoDetails.fatorVencimento = rawData.substring(5, 9);
         boletoDetails.dataVencimento = calcularDataVencimento(rawData.substring(5, 9));
         boletoDetails.valor = extrairValorBoleto(rawData.substring(9, 19));
         boletoDetails.beneficiario = rawData.substring(27, 34);
         
-        // Converter código de barras para linha digitável
         linhaDigitavelFormatada = 
           `Banco: ${boletoDetails.codigoBanco} | ` + 
           `Vencimento: ${boletoDetails.dataVencimento} | ` +
           `Valor: R$ ${boletoDetails.valor.toFixed(2)} | ` +
           `Benef: ${boletoDetails.beneficiario}`;
           
-        // Construção completa da linha digitável (isso é uma simplificação)
         const linhaCompleta = 
           `${rawData.substring(0,4)}${rawData.substring(19,24)}${rawData.substring(24,34)}${rawData.substring(34,44)}`;
         boletoDetails.linhaDigitavel = linhaCompleta;
       }
       
-      // Adicionar o boleto à lista
-      if (boletoDetails) {
-        setBoletosList(prevList => [...prevList, boletoDetails!]);
+      // Criar o resultado do boleto
+      const newResult: BarcodeResult = {
+        id: Date.now().toString(),
+        data: isBoleto ? linhaDigitavelFormatada : data,
+        type: type,
+        timestamp: new Date().toLocaleTimeString(),
+        isBoleto,
+        linhaDigitavelFormatada: isBoleto ? linhaDigitavelFormatada : undefined,
+        boletoDetails: isBoleto ? boletoDetails : undefined
+      };
+      
+      // Atualizar os resultados exibidos imediatamente para feedback ao usuário
+      setResults(prevResults => {
+        const updatedResults = [newResult, ...prevResults];
+        return updatedResults.slice(0, 10);
+      });
+      
+      // Verificar se o banco é conhecido
+      if (boletoDetails && boletoDetails.codigoBanco) {
+        const bankCode = boletoDetails.codigoBanco;
+        const isKnown = await isBankKnown(bankCode);
+        
+        if (isKnown) {
+          // Se o banco é conhecido, processa normalmente
+          processVerifiedBoleto(newResult);
+        } else {
+          // Se o banco NÃO é conhecido, mostra o modal para cadastro
+          setIsScanning(false); // Pausa o scanner enquanto o modal está aberto
+          setCurrentBankCode(bankCode);
+          setPendingBoleto(newResult);
+          setShowBankModal(true);
+        }
       }
+    } else {
+      // Se não for boleto, apenas mostra nos resultados sem adicionar ao histórico
+      const newResult: BarcodeResult = {
+        id: Date.now().toString(),
+        data: data,
+        type: type,
+        timestamp: new Date().toLocaleTimeString(),
+        isBoleto: false
+      };
+      
+      setResults(prevResults => {
+        const updatedResults = [newResult, ...prevResults];
+        return updatedResults.slice(0, 10);
+      });
     }
-  
-    const newResult: BarcodeResult = {
-      id: Date.now().toString(),
-      data: isBoleto ? linhaDigitavelFormatada : data,
-      type: type,
-      timestamp: new Date().toLocaleTimeString(),
-      isBoleto,
-      linhaDigitavelFormatada: isBoleto ? linhaDigitavelFormatada : undefined,
-      boletoDetails: isBoleto ? boletoDetails : undefined
-    };
-  
-
-    
-    setResults(prevResults => {
-      const updatedResults = [newResult, ...prevResults];
-      const resultsToStore = updatedResults.slice(0, 10);
-      
-      // Save to AsyncStorage
-      saveResultsToStorage([newResult, ...prevResults]); // Save all results, not just the last 10
-      
-      return resultsToStore;
-    });
   };
 
-  // Add this new function to save results to AsyncStorage
+  // Nova função para processar boletos verificados
+  const processVerifiedBoleto = async (boleto: BarcodeResult) => {
+    if (!boleto.isBoleto || !boleto.boletoDetails) return;
+    
+    // Adiciona o boleto à lista de exibição
+    if (boleto.boletoDetails) {
+      setBoletosList(prevList => [...prevList, boleto.boletoDetails!]);
+    }
+    
+    // Verifica se já existe no AsyncStorage para evitar duplicatas
+    AsyncStorage.getItem('scanResults')
+      .then(storedResults => {
+        let allStoredResults: BarcodeResult[] = [];
+        
+        if (storedResults) {
+          allStoredResults = JSON.parse(storedResults);
+        }
+        
+        // Verificar duplicatas
+        const isDuplicate = allStoredResults.some(result => {
+          if (result.boletoDetails && boleto.boletoDetails) {
+            return (
+              (result.boletoDetails.codigoBarras && 
+              boleto.boletoDetails.codigoBarras &&
+              result.boletoDetails.codigoBarras === boleto.boletoDetails.codigoBarras) ||
+              (result.boletoDetails.linhaDigitavel && 
+              boleto.boletoDetails.linhaDigitavel &&
+              result.boletoDetails.linhaDigitavel === boleto.boletoDetails.linhaDigitavel)
+            );
+          }
+          return false;
+        });
+        
+        if (!isDuplicate) {
+          // Adiciona o nome do banco se existir
+          getBankName(boleto.boletoDetails.codigoBanco || '').then(bankName => {
+            if (bankName && boleto.boletoDetails) {
+              boleto.boletoDetails.beneficiario = bankName + ' - ' + (boleto.boletoDetails.beneficiario || '');
+            }
+            
+            // Adiciona aos resultados armazenados
+            const updatedStoredResults = [boleto, ...allStoredResults];
+            saveResultsToStorage(updatedStoredResults);
+          });
+        } else {
+          console.log('Duplicate boleto not saved to history');
+        }
+      })
+      .catch(error => {
+        console.error('Error updating stored results:', error);
+      });
+  };
+  
+  // Função para salvar ou descartar o boleto pendente
+  const handleBankAction = async (shouldSave: boolean) => {
+    if (shouldSave && newBankName.trim() && currentBankCode && pendingBoleto) {
+      // Salvar o novo banco
+      const result = await addNewBank(currentBankCode, newBankName.trim());
+      
+      if (result.success) {
+        Alert.alert('Sucesso', result.message);
+        // Processar o boleto pendente
+        processVerifiedBoleto(pendingBoleto);
+      } else {
+        Alert.alert('Erro', result.message);
+      }
+    }
+    
+    // Limpar o estado e fechar o modal
+    setNewBankName('');
+    setCurrentBankCode('');
+    setPendingBoleto(null);
+    setShowBankModal(false);
+    setIsScanning(true); // Retomar o scanner
+  };
+
+
+  // In your index.tsx file
   const saveResultsToStorage = async (results: BarcodeResult[]) => {
     try {
-      const jsonValue = JSON.stringify(results);
+      // Set a higher limit, for example 100 or 500 items
+      const MAX_STORED_RESULTS = 500;
+      
+      // Limit the results if they exceed the maximum
+      const limitedResults = results.slice(0, MAX_STORED_RESULTS);
+      
+      const jsonValue = JSON.stringify(limitedResults);
       await AsyncStorage.setItem('scanResults', jsonValue);
     } catch (error) {
       console.error('Error saving results to storage:', error);
@@ -332,6 +446,44 @@ const calcularDataVencimento = (fatorVencimento: string): string => {
           <View style={styles.scanArea} />
         </View>
       </View>
+      
+      {/* Modal para cadastro de novo banco */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={showBankModal}
+        onRequestClose={() => handleBankAction(false)}
+      >
+        <View style={styles.centeredView}>
+          <View style={styles.modalView}>
+            <Text style={styles.modalTitle}>Banco Desconhecido</Text>
+            <Text style={styles.modalText}>
+              O código de banco {currentBankCode} não está na lista de bancos conhecidos.
+              Deseja cadastrar este banco?
+            </Text>
+            
+            <TextInput
+              style={styles.input}
+              placeholder="Nome do Banco"
+              value={newBankName}
+              onChangeText={setNewBankName}
+            />
+            
+            <View style={styles.modalButtons}>
+              <Button 
+                title="Cancelar" 
+                onPress={() => handleBankAction(false)} 
+                color="#ff6347"
+              />
+              <Button 
+                title="Salvar Banco" 
+                onPress={() => handleBankAction(true)}
+                disabled={!newBankName.trim()}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
       
       <View style={styles.controlsContainer}>
         <Button 
@@ -473,5 +625,52 @@ const styles = StyleSheet.create({
     fontSize: 18,
     margin: 20,
     textAlign: 'center',
-  }
-});
+  },
+    // Estilos para o modal
+    centeredView: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: 'rgba(0,0,0,0.5)'
+    },
+    modalView: {
+      width: '80%',
+      backgroundColor: 'white',
+      borderRadius: 20,
+      padding: 20,
+      alignItems: 'center',
+      shadowColor: '#000',
+      shadowOffset: {
+        width: 0,
+        height: 2
+      },
+      shadowOpacity: 0.25,
+      shadowRadius: 4,
+      elevation: 5
+    },
+    modalTitle: {
+      marginBottom: 15,
+      textAlign: 'center',
+      fontSize: 18,
+      fontWeight: 'bold'
+    },
+    modalText: {
+      marginBottom: 15,
+      textAlign: 'center'
+    },
+    input: {
+      height: 40,
+      width: '100%',
+      marginVertical: 10,
+      borderWidth: 1,
+      borderColor: '#cccccc',
+      borderRadius: 5,
+      paddingHorizontal: 10
+    },
+    modalButtons: {
+      flexDirection: 'row',
+      justifyContent: 'space-around',
+      width: '100%',
+      marginTop: 15
+    }
+  });
