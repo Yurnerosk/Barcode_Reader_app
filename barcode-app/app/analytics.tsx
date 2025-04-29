@@ -18,7 +18,7 @@ interface BarcodeResult {
     valor?: number;
     dataVencimento?: string;
     beneficiario?: string;
-    dataLeitura: string;
+    dataLeitura?: string;
   };
 }
 
@@ -75,6 +75,13 @@ export default function AnalyticsScreen() {
           r.boletoDetails.valor > 0
         );
         
+        // Log para debug
+        console.log('Boletos para análise:', JSON.stringify(validBoletos.map(b => ({
+          id: b.id,
+          dataVencimento: b.boletoDetails?.dataVencimento,
+          valor: b.boletoDetails?.valor
+        }))));
+        
         setBoletosData(validBoletos);
       }
     } catch (error) {
@@ -106,18 +113,32 @@ export default function AnalyticsScreen() {
       }
       
       filteredData = boletosData.filter(boleto => {
-        if (boleto.boletoDetails && boleto.boletoDetails.dataVencimento) {
-          // Converte a string da data de vencimento em objeto Date
-          const parts = boleto.boletoDetails.dataVencimento.split('/');
-          if (parts.length === 3) {
-            // Formato brasileiro: DD/MM/AAAA
-            const dataVencimento = new Date(
-              parseInt(parts[2]), // Ano
-              parseInt(parts[1]) - 1, // Mês (0-11)
-              parseInt(parts[0]) // Dia
-            );
-            
-            return dataVencimento >= filterDate;
+        if (boleto.boletoDetails) {
+          // Tenta usar a data de vencimento
+          if (boleto.boletoDetails.dataVencimento) {
+            try {
+              const parts = boleto.boletoDetails.dataVencimento.split('/');
+              if (parts && parts.length === 3) {
+                const dataVencimento = new Date(
+                  parseInt(parts[2]), // Ano
+                  parseInt(parts[1]) - 1, // Mês (0-11)
+                  parseInt(parts[0]) // Dia
+                );
+                return dataVencimento >= filterDate;
+              }
+            } catch (err) {
+              console.log('Erro ao converter data de vencimento:', err);
+            }
+          }
+          
+          // Fallback para data de leitura
+          if (boleto.boletoDetails.dataLeitura) {
+            try {
+              const dataLeitura = new Date(boleto.boletoDetails.dataLeitura);
+              return dataLeitura >= filterDate;
+            } catch (err) {
+              console.log('Erro ao converter data de leitura:', err);
+            }
           }
         }
         return false;
@@ -140,7 +161,14 @@ export default function AnalyticsScreen() {
     // Processa cada boleto
     filteredData.forEach(boleto => {
       if (boleto.boletoDetails) {
-        const { codigoBanco, valor, beneficiario, dataLeitura } = boleto.boletoDetails;
+        // Desestruturação segura com valores padrão
+        const {
+          codigoBanco,
+          valor = 0,
+          beneficiario,
+          dataVencimento,
+          dataLeitura
+        } = boleto.boletoDetails;
         
         // Agrega por banco
         if (codigoBanco && valor) {
@@ -154,16 +182,36 @@ export default function AnalyticsScreen() {
         }
         
         // Agrega por mês
-        if (dataVencimento && valor) {
-          // Convertendo a data de vencimento no formato DD/MM/AAAA para objeto Date
-          const parts = dataVencimento.split('/');
-          if (parts.length === 3) {
-            const date = new Date(
-              parseInt(parts[2]), // Ano
-              parseInt(parts[1]) - 1, // Mês (0-11)
-              parseInt(parts[0]) // Dia
-            );
-            
+        if (valor) {
+          let date;
+          
+          // Tenta usar a data de vencimento primeiro
+          if (dataVencimento) {
+            try {
+              const parts = dataVencimento.split('/');
+              if (parts && parts.length === 3) {
+                date = new Date(
+                  parseInt(parts[2]), // Ano
+                  parseInt(parts[1]) - 1, // Mês (0-11)
+                  parseInt(parts[0]) // Dia
+                );
+              }
+            } catch (err) {
+              console.log('Erro ao processar data de vencimento:', err);
+            }
+          }
+          
+          // Se não conseguiu usar a data de vencimento, tenta usar a data de leitura
+          if (!date && dataLeitura) {
+            try {
+              date = new Date(dataLeitura);
+            } catch (err) {
+              console.log('Erro ao processar data de leitura:', err);
+            }
+          }
+          
+          // Se tem uma data válida, agrega por mês
+          if (date && date instanceof Date && !isNaN(date.getTime())) {
             const monthYearKey = `${date.getMonth() + 1}/${date.getFullYear()}`;
             evolucaoPorMes[monthYearKey] = (evolucaoPorMes[monthYearKey] || 0) + valor;
           }
@@ -338,7 +386,7 @@ export default function AnalyticsScreen() {
       
       {/* Gráfico de evolução mensal */}
       <View style={styles.chartContainer}>
-        <Text style={styles.chartTitle}>Evolução Mensal por Data de Vencimento</Text>
+        <Text style={styles.chartTitle}>Evolução Mensal por Data</Text>
         {Object.keys(analyticsData.evolucaoPorMes).length > 0 ? (
           <LineChart
             data={getMonthlyChartData()}
@@ -395,7 +443,7 @@ export default function AnalyticsScreen() {
       {/* Gráfico de barras por banco ou beneficiário */}
       <View style={styles.chartContainer}>
         <Text style={styles.chartTitle}>
-          Total {selectedFilter === 'banco' ? 'por Banco' : 'por Beneficiário'} (por Data de Vencimento)
+          Total {selectedFilter === 'banco' ? 'por Banco' : 'por Beneficiário'}
         </Text>
         
         {Object.keys(selectedFilter === 'banco' ? 
