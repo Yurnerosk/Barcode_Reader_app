@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Text, View, StyleSheet, FlatList, TouchableOpacity, Alert, Modal, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { getKnownBanks, addNewBank } from './bankDatabase';
+import { getKnownBanks, addNewBank } from '../bankDatabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface Bank {

@@ -23,6 +23,7 @@ interface BarcodeResult {
     codigoBarras?: string;
     linhaDigitavel?: string;
     beneficiario?: string;
+    nomeBeneficiario?: string;
     fatorVencimento?: string;
     tipoCodigoBarras?: string;
     dataLeitura: string;
@@ -68,7 +69,7 @@ export default function ResultsScreen() {
   const exportToCSV = async () => {
     try {
       // Create CSV header
-      let csvContent = 'id,timestamp,bankCode,value,dueDate,beneficiary,barcode\n';
+      let csvContent = 'id,timestamp,bankCode,value,dueDate,beneficiaryCode,beneficiaryName,barcode\n';
       
       // Add each result as a row
       allResults.forEach(result => {
@@ -79,6 +80,7 @@ export default function ResultsScreen() {
           result.boletoDetails?.valor || '',
           result.boletoDetails?.dataVencimento || '',
           result.boletoDetails?.beneficiario || '',
+          `"${result.boletoDetails?.nomeBeneficiario || ''}"`,
           `"${result.boletoDetails?.codigoBarras || ''}"` // Escape quotes in CSV
         ].join(',');
         
@@ -132,6 +134,25 @@ export default function ResultsScreen() {
     );
   };
 
+  // Format the beneficiary display to include both code and name
+  const formatBeneficiaryDisplay = (result: BarcodeResult) => {
+    if (!result.boletoDetails) return '-';
+    
+    let displayText = '';
+    
+    // Add code if available
+    if (result.boletoDetails.beneficiario) {
+      displayText += result.boletoDetails.beneficiario;
+    }
+    
+    // Add name if available
+    if (result.boletoDetails.nomeBeneficiario) {
+      displayText += displayText ? ` - ${result.boletoDetails.nomeBeneficiario}` : result.boletoDetails.nomeBeneficiario;
+    }
+    
+    return displayText || '-';
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -163,58 +184,57 @@ export default function ResultsScreen() {
               <DataTable.Title style={styles.column}>Bank</DataTable.Title>
               <DataTable.Title style={[styles.column, styles.numberColumn]}>Value</DataTable.Title>
               <DataTable.Title style={styles.column}>Due Date</DataTable.Title>
-              <DataTable.Title style={styles.wideColumn}>Beneficiary</DataTable.Title>
-              {/* <DataTable.Title style={styles.wideColumn}>Data</DataTable.Title> */}
+              <DataTable.Title style={styles.wideColumn}>Beneficiary (Code - Name)</DataTable.Title>
             </DataTable.Header>
 
-            {allResults.map((result) => (
-              <DataTable.Row key={result.id} style={styles.tableRow}>
-                <DataTable.Cell style={styles.column}>
-                  <Text>{result.timestamp}</Text>
-                </DataTable.Cell>
+            {allResults.map((result) => {
+              const isGovBoleto = result.boletoDetails?.codigoBanco === "Governo";
+              
+              return (
+                <DataTable.Row key={result.id} style={[
+                  styles.tableRow,
+                  isGovBoleto ? { backgroundColor: '#f0f8ff' } : {} // Fundo azul claro para boletos governamentais
+                ]}>
+                  <DataTable.Cell style={styles.column}>
+                    <Text>{result.timestamp}</Text>
+                  </DataTable.Cell>
 
-                <DataTable.Cell 
-                  style={styles.column}
-                  onPress={() => result.boletoDetails?.codigoBanco && 
-                    copyToClipboard(result.boletoDetails.codigoBanco)}
-                >
-                  <Text>{result.boletoDetails?.codigoBanco || '-'}</Text>
-                </DataTable.Cell>
+                  <DataTable.Cell 
+                    style={styles.column}
+                    onPress={() => result.boletoDetails?.codigoBanco && 
+                      copyToClipboard(result.boletoDetails.codigoBanco)}
+                  >
+                    <Text>{isGovBoleto ? 'Governo' : (result.boletoDetails?.codigoBanco || '-')}</Text>
+                  </DataTable.Cell>
 
-                <DataTable.Cell 
-                  style={[styles.column, styles.numberColumn]}
-                  onPress={() => result.boletoDetails?.valor && 
-                    copyToClipboard(result.boletoDetails.valor.toFixed(2))}
-                >
-                  <Text style={styles.value}>
-                    {result.boletoDetails?.valor 
-                      ? `R$ ${result.boletoDetails.valor.toFixed(2)}` 
-                      : '-'}
-                  </Text>
-                </DataTable.Cell>
-            
-                <DataTable.Cell style={styles.column}>
-                  <Text>{result.boletoDetails?.dataVencimento || '-'}</Text>
-                </DataTable.Cell>
-                
-                <DataTable.Cell 
-                  style={styles.wideColumn}
-                  onPress={() => result.boletoDetails?.beneficiario && 
-                    copyToClipboard(result.boletoDetails.beneficiario)}
-                >
-                  <Text>{result.boletoDetails?.beneficiario || '-'}</Text>
-                </DataTable.Cell>
-                
-                {/* <DataTable.Cell 
-                  style={styles.wideColumn}
-                  onPress={() => copyToClipboard(result.data)}
-                >
-                  <Text numberOfLines={1} ellipsizeMode="tail">
-                    {result.data}
-                  </Text>
-                </DataTable.Cell> */}
-              </DataTable.Row>
-            ))}
+                  <DataTable.Cell 
+                    style={[styles.column, styles.numberColumn]}
+                    onPress={() => result.boletoDetails?.valor && 
+                      copyToClipboard(result.boletoDetails.valor.toFixed(2))}
+                  >
+                    <Text style={styles.value}>
+                      {result.boletoDetails?.valor 
+                        ? `R$ ${result.boletoDetails.valor.toFixed(2)}` 
+                        : '-'}
+                    </Text>
+                  </DataTable.Cell>
+              
+                  <DataTable.Cell style={styles.column}>
+                    <Text>{!isGovBoleto ? (result.boletoDetails?.dataVencimento || '-') : '-'}</Text>
+                  </DataTable.Cell>
+                  
+                  <DataTable.Cell 
+                    style={styles.wideColumn}
+                    onPress={() => {
+                      const text = formatBeneficiaryDisplay(result);
+                      if (text !== '-') copyToClipboard(text);
+                    }}
+                  >
+                    <Text>{formatBeneficiaryDisplay(result)}</Text>
+                  </DataTable.Cell>
+                </DataTable.Row>
+              );
+            })}
           </DataTable>
         </ScrollView>
       )}
@@ -291,8 +311,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 5,
   },
   wideColumn: {
-    flex: 1,
-    paddingHorizontal: 0,
+    flex: 2, // Increased width for beneficiary column
+    paddingHorizontal: 5,
   },
   numberColumn: {
     justifyContent: 'flex-end',

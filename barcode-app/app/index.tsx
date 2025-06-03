@@ -8,8 +8,7 @@ import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Importe as funções do banco de dados de bancos
-import { initializeBanksDatabase, isBankKnown, addNewBank, getBankName } from './bankDatabase';
-
+import { initializeBanksDatabase, isBankKnown, addNewBank, getBankName } from '../bankDatabase';
 
 // Updated BarcodeResult interface with more detailed boleto properties
 interface BarcodeResult {
@@ -19,18 +18,26 @@ interface BarcodeResult {
   timestamp: string;
   isBoleto: boolean;
   linhaDigitavelFormatada?: string;
+
   // New boleto-specific properties
   boletoDetails?: {
-    codigoBanco?: string;        // Código do banco
+    codigoBanco?: string;        // Código do banco ou "Governo" para boletos governamentais
     valor?: number;              // Valor do boleto em reais
     dataVencimento?: string;     // Data de vencimento
     codigoBarras?: string;       // Código de barras original
     linhaDigitavel?: string;     // Linha digitável formatada
     beneficiario?: string;       // Código do beneficiário
+    nomeBeneficiario?: string;   // Nome do beneficiário (adicionado)
+
     fatorVencimento?: string;    // Fator de vencimento
     tipoCodigoBarras?: string;   // "44" para código de barras ou "47" para linha digitável
     dataLeitura: string;         // Data e hora da leitura
   };
+}
+
+interface BeneficiarioInfo {
+  codigo: string;
+  nome: string;
 }
 
 export default function Index() {
@@ -45,12 +52,75 @@ export default function Index() {
   const [newBankName, setNewBankName] = useState('');
   const [currentBankCode, setCurrentBankCode] = useState('');
 
+  // Novas variáveis de estado para o modal de beneficiário
+  const [showBeneficiarioModal, setShowBeneficiarioModal] = useState(false);
+  const [newBeneficiarioName, setNewBeneficiarioName] = useState('');
+  const [beneficiariosConhecidos, setBeneficiariosConhecidos] = useState<BeneficiarioInfo[]>([]);
+
+
   useEffect(() => {
     requestPermission();
     // Inicializar o banco de dados de bancos conhecidos
     initializeBanksDatabase();
+    // Carregar beneficiários conhecidos
+    carregarBeneficiariosConhecidos();
   }, []);
 
+  // Função para carregar beneficiários conhecidos do AsyncStorage
+  const carregarBeneficiariosConhecidos = async () => {
+    try {
+      const benefInfoJson = await AsyncStorage.getItem('known_beneficiarios');
+      if (benefInfoJson) {
+        const benefList = JSON.parse(benefInfoJson) as BeneficiarioInfo[];
+        setBeneficiariosConhecidos(benefList);
+      }
+    } catch (error) {
+      console.error('Erro ao carregar beneficiários conhecidos:', error);
+    }
+  };
+
+  // Função para salvar um novo beneficiário
+  const salvarBeneficiario = async (codigo: string, nome: string) => {
+    try {
+      // Verificar se já existe esse beneficiário
+      const benefExistente = beneficiariosConhecidos.find(b => b.codigo === codigo);
+      
+      let novaLista: BeneficiarioInfo[];
+      
+      if (benefExistente) {
+        // Atualiza o nome do beneficiário existente
+        novaLista = beneficiariosConhecidos.map(b => 
+          b.codigo === codigo ? { ...b, nome } : b
+        );
+      } else {
+        // Adiciona novo beneficiário
+        novaLista = [...beneficiariosConhecidos, { codigo, nome }];
+      }
+      
+      // Salva a lista atualizada
+      await AsyncStorage.setItem('known_beneficiarios', JSON.stringify(novaLista));
+      setBeneficiariosConhecidos(novaLista);
+      
+      return {
+        success: true,
+        message: benefExistente ? 'Beneficiário atualizado com sucesso' : 'Beneficiário cadastrado com sucesso'
+      };
+    } catch (error) {
+      console.error('Erro ao salvar beneficiário:', error);
+      return {
+        success: false,
+        message: 'Erro ao salvar beneficiário'
+      };
+    }
+  };
+
+  // Função para obter o nome do beneficiário pelo código
+  const getNomeBeneficiario = (codigo: string): string => {
+    const benefInfo = beneficiariosConhecidos.find(b => b.codigo === codigo);
+    return benefInfo ? benefInfo.nome : '';
+  };
+
+  
 // Função para calcular a data de vencimento a partir do fator de vencimento
 const calcularDataVencimento = (fatorVencimento: string): string => {
   try {
@@ -116,12 +186,13 @@ const calcularDataVencimento = (fatorVencimento: string): string => {
     
     return codeTypes[typeStr] || typeStr;
   };
+// Inside the handleBarCodeScanned function, right after processing the raw data,
+// add these detailed logging statements:
 
-  // Modificar a função handleBarCodeScanned para verificar bancos conhecidos
   const handleBarCodeScanned = async (scanningResult: BarcodeScanningResult) => {
     if (!isScanning) return;
     
-    console.log("Resultado do scan:", JSON.stringify(scanningResult));
+    console.log("Resultado do scan completo:", JSON.stringify(scanningResult));
     
     let data = '';
     let type = '';
@@ -146,8 +217,34 @@ const calcularDataVencimento = (fatorVencimento: string): string => {
     
     // Remove caracteres não numéricos (pontos, espaços)
     const rawData = data.replace(/[^0-9]/g, '');
+    
+    // Log detalhado do código processado
+    console.log("\n===== DETALHES DO CÓDIGO LIDO =====");
+    console.log("Tipo:", type);
+    console.log("Dados brutos:", data);
+    console.log("Dados processados:", rawData);
+    console.log("Comprimento:", rawData.length);
+    
     const isBoleto = /^[0-9]{44}$/.test(rawData) || /^[0-9]{47}$/.test(rawData);
-  
+    console.log("É boleto:", isBoleto);
+    
+    if (isBoleto && rawData.length === 44) {
+      console.log("\n===== INFORMAÇÕES DO BOLETO =====");
+      console.log("Código do Banco:", rawData.substring(0, 3));
+      console.log("Moeda:", rawData.substring(3, 4));
+      console.log("Fator Vencimento:", rawData.substring(5, 9));
+      console.log("Valor:", rawData.substring(9, 19));
+      
+      // Log das diferentes posições de beneficiário para debugging
+      console.log("\n===== POSSÍVEIS CÓDIGOS DE BENEFICIÁRIO =====");
+      console.log("Posição Santander (20-27):", rawData.substring(20, 27));
+      console.log("Posição Itaú (35-41):", rawData.substring(35, 41));
+      console.log("Posição Outros (36-43):", rawData.substring(36, 43));
+      console.log("Posição Original (27-34):", rawData.substring(27, 34));
+      console.log("===================================\n");
+    }
+    
+    // Resto do código continua normalmente...
     // Variáveis para armazenar as informações do boleto
     let boletoDetails: BarcodeResult['boletoDetails'] | undefined;
     let linhaDigitavelFormatada = '';
@@ -160,8 +257,26 @@ const calcularDataVencimento = (fatorVencimento: string): string => {
         dataLeitura: new Date().toISOString(),
       };
 
-      if (rawData.length === 47) {
-        // Extração para linha digitável
+      // Verificar se é um boleto do governo (começa com 8)
+      const isGovBoleto = rawData.charAt(0) === '8';
+      
+      if (isGovBoleto) {
+        // Lógica específica para boletos do governo (GRU, etc.)
+        boletoDetails.codigoBanco = "Governo"; // Identificação genérica para boletos do governo
+        
+        // Extração do valor entre as posições 4 a 15 (começando do 0)
+        if (rawData.length >= 15) {
+          const valorStr = rawData.substring(4, 15);
+          boletoDetails.valor = parseFloat(valorStr) / 100; // Divide por 100 para obter o valor em reais
+        }
+        
+        // Formatação para exibição
+        linhaDigitavelFormatada = 
+          `Tipo: Boleto Governamental | ` +
+          (boletoDetails.valor ? `Valor: R$ ${boletoDetails.valor.toFixed(2)}` : 'Valor não identificado');
+        
+      } else if (rawData.length === 47) {
+        // Lógica existente para linha digitável (47 dígitos)
         linhaDigitavelFormatada = `${rawData.substring(0,5)}.${rawData.substring(5,10)} ` +
                                 `${rawData.substring(10,15)}.${rawData.substring(15,21)} ` +
                                 `${rawData.substring(21,26)}.${rawData.substring(26,32)} ` +
@@ -176,22 +291,40 @@ const calcularDataVencimento = (fatorVencimento: string): string => {
         }
         
       } else if (rawData.length === 44) {
-        // Extração para código de barras
-        boletoDetails.codigoBanco = rawData.substring(0, 3);
-        boletoDetails.fatorVencimento = rawData.substring(5, 9);
-        boletoDetails.dataVencimento = calcularDataVencimento(rawData.substring(5, 9));
-        boletoDetails.valor = extrairValorBoleto(rawData.substring(9, 19));
-        boletoDetails.beneficiario = rawData.substring(27, 34);
-        
-        linhaDigitavelFormatada = 
-          `Banco: ${boletoDetails.codigoBanco} | ` + 
-          `Vencimento: ${boletoDetails.dataVencimento} | ` +
-          `Valor: R$ ${boletoDetails.valor.toFixed(2)} | ` +
-          `Benef: ${boletoDetails.beneficiario}`;
+        // Lógica existente para código de barras (44 dígitos)
+        // Verificar novamente se é um boleto do governo
+        if (isGovBoleto) {
+          // Já tratado acima
+        } else {
+          // Lógica padrão para boletos bancários normais
+          boletoDetails.codigoBanco = rawData.substring(0, 3);
+          boletoDetails.fatorVencimento = rawData.substring(5, 9);
+          boletoDetails.dataVencimento = calcularDataVencimento(rawData.substring(5, 9));
+          boletoDetails.valor = extrairValorBoleto(rawData.substring(9, 19));
+          // boletoDetails.beneficiario = rawData.substring(36, 43);
           
-        const linhaCompleta = 
-          `${rawData.substring(0,4)}${rawData.substring(19,24)}${rawData.substring(24,34)}${rawData.substring(34,44)}`;
-        boletoDetails.linhaDigitavel = linhaCompleta;
+          // Verificação específica para diferentes bancos
+          if (boletoDetails.codigoBanco === "033") {
+            // Posição específica para o Santander
+            boletoDetails.beneficiario = rawData.substring(20, 27);
+          } else if (boletoDetails.codigoBanco === "341") {
+            // Posição específica para o Itaú
+            boletoDetails.beneficiario = rawData.substring(35, 41);
+          } else {
+            // Posição para os demais bancos
+            boletoDetails.beneficiario = rawData.substring(36, 43);
+          }
+  
+          linhaDigitavelFormatada = 
+            `Banco: ${boletoDetails.codigoBanco} | ` + 
+            `Vencimento: ${boletoDetails.dataVencimento} | ` +
+            `Valor: R$ ${boletoDetails.valor.toFixed(2)} | ` +
+            `Benef: ${boletoDetails.beneficiario}`;
+            
+          const linhaCompleta = 
+            `${rawData.substring(0,4)}${rawData.substring(19,24)}${rawData.substring(24,34)}${rawData.substring(34,44)}`;
+          boletoDetails.linhaDigitavel = linhaCompleta;
+        }
       }
       
       // Criar o resultado do boleto
@@ -214,17 +347,41 @@ const calcularDataVencimento = (fatorVencimento: string): string => {
       // Verificar se o banco é conhecido
       if (boletoDetails && boletoDetails.codigoBanco) {
         const bankCode = boletoDetails.codigoBanco;
-        const isKnown = await isBankKnown(bankCode);
         
-        if (isKnown) {
-          // Se o banco é conhecido, processa normalmente
+        // Se for boleto do governo, processar diretamente
+        if (bankCode === "Governo") {
           processVerifiedBoleto(newResult);
         } else {
-          // Se o banco NÃO é conhecido, mostra o modal para cadastro
-          setIsScanning(false); // Pausa o scanner enquanto o modal está aberto
-          setCurrentBankCode(bankCode);
-          setPendingBoleto(newResult);
-          setShowBankModal(true);
+          // Verificação normal para outros bancos
+          const isKnown = await isBankKnown(bankCode);
+          
+          if (isKnown) {
+            // If the bank is known, check if we already know the beneficiary code
+            if (boletoDetails.beneficiario) {
+              const nomeBenefConhecido = getNomeBeneficiario(boletoDetails.beneficiario);
+              
+              if (nomeBenefConhecido) {
+                // If we already know this beneficiary, add the name and process directly
+                boletoDetails.nomeBeneficiario = nomeBenefConhecido;
+                processVerifiedBoleto(newResult);
+              } else {
+                // If we don't know this beneficiary yet, ask for the name
+                setIsScanning(false);
+                setPendingBoleto(newResult);
+                setNewBeneficiarioName('');
+                setShowBeneficiarioModal(true);
+              }
+            } else {
+              // If there's no beneficiary code, process normally
+              processVerifiedBoleto(newResult);
+            }
+          } else {
+            // If the bank is NOT known, show the bank registration modal
+            setIsScanning(false);
+            setCurrentBankCode(bankCode);
+            setPendingBoleto(newResult);
+            setShowBankModal(true);
+          }
         }
       }
     } else {
@@ -320,6 +477,44 @@ const calcularDataVencimento = (fatorVencimento: string): string => {
     setIsScanning(true); // Retomar o scanner
   };
 
+  // Nova função para processar a ação do beneficiário
+  const handleBeneficiarioAction = async (shouldSave: boolean) => {
+    if (shouldSave && newBeneficiarioName.trim() && pendingBoleto && pendingBoleto.boletoDetails) {
+      // Obter o código do beneficiário
+      const codigoBenef = pendingBoleto.boletoDetails.beneficiario || '';
+      
+      if (codigoBenef) {
+        // Salvar o nome do beneficiário
+        const result = await salvarBeneficiario(codigoBenef, newBeneficiarioName.trim());
+        
+        if (result.success) {
+          // Atualizar o boleto pendente com o nome do beneficiário
+          pendingBoleto.boletoDetails.nomeBeneficiario = newBeneficiarioName.trim();
+          
+          // Processar o boleto
+          processVerifiedBoleto(pendingBoleto);
+          Alert.alert('Sucesso', result.message);
+        } else {
+          Alert.alert('Erro', result.message);
+          // Mesmo com erro, processa o boleto sem o nome
+          processVerifiedBoleto(pendingBoleto);
+        }
+      } else {
+        // Se não tem código de beneficiário, processa diretamente
+        processVerifiedBoleto(pendingBoleto);
+      }
+    } else if (pendingBoleto) {
+      // Se o usuário não quer salvar o nome, processa o boleto de qualquer forma
+      processVerifiedBoleto(pendingBoleto);
+    }
+    
+    // Limpar o estado e fechar o modal
+    setNewBeneficiarioName('');
+    setShowBeneficiarioModal(false);
+    setPendingBoleto(null);
+    setIsScanning(true); // Retomar o scanner
+  };
+
 
   // In your index.tsx file
   const saveResultsToStorage = async (results: BarcodeResult[]) => {
@@ -375,7 +570,7 @@ const calcularDataVencimento = (fatorVencimento: string): string => {
     setIsScanning(prev => !prev);
   };
 
-  // Modificar o renderResultItem para mostrar mais informações dos boletos
+  // Check and fix the renderResultItem function in index.tsx
   const renderResultItem = ({ item }: { item: BarcodeResult }) => (
     <View style={[
       styles.resultItem,
@@ -391,14 +586,17 @@ const calcularDataVencimento = (fatorVencimento: string): string => {
         <>
           <Text style={[styles.resultType, { color: '#28a745' }]}>💰 BOLETO BANCÁRIO</Text>
           <Text style={styles.resultLabel}>Banco: <Text style={styles.resultValue}>{item.boletoDetails.codigoBanco || 'N/A'}</Text></Text>
-          {item.boletoDetails.valor && (
+          {item.boletoDetails.valor !== undefined && (
             <Text style={styles.resultLabel}>Valor: <Text style={styles.resultValue}>R$ {item.boletoDetails.valor.toFixed(2)}</Text></Text>
           )}
           {item.boletoDetails.dataVencimento && (
             <Text style={styles.resultLabel}>Vencimento: <Text style={styles.resultValue}>{item.boletoDetails.dataVencimento}</Text></Text>
           )}
           {item.boletoDetails.beneficiario && (
-            <Text style={styles.resultLabel}>Beneficiário: <Text style={styles.resultValue}>{item.boletoDetails.beneficiario}</Text></Text>
+            <Text style={styles.resultLabel}>Código: <Text style={styles.resultValue}>{item.boletoDetails.beneficiario}</Text></Text>
+          )}
+          {item.boletoDetails.nomeBeneficiario && (
+            <Text style={styles.resultLabel}>Nome: <Text style={styles.resultValue}>{item.boletoDetails.nomeBeneficiario}</Text></Text>
           )}
           <Text style={styles.resultData}>{item.data}</Text>
         </>
@@ -485,6 +683,46 @@ const calcularDataVencimento = (fatorVencimento: string): string => {
         </View>
       </Modal>
       
+      {/* Modal para cadastro de nome do beneficiário */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={showBeneficiarioModal}
+        onRequestClose={() => handleBeneficiarioAction(false)}
+      >
+        <View style={styles.centeredView}>
+          <View style={styles.modalView}>
+            <Text style={styles.modalTitle}>Nome do Beneficiário</Text>
+            <Text style={styles.modalText}>
+              {pendingBoleto?.boletoDetails?.beneficiario ? 
+                `Informe o nome do beneficiário para o código ${pendingBoleto.boletoDetails.beneficiario}:` :
+                'Informe o nome do beneficiário deste boleto:'}
+            </Text>
+            
+            <TextInput
+              style={styles.input}
+              placeholder="Nome do Beneficiário"
+              value={newBeneficiarioName}
+              onChangeText={setNewBeneficiarioName}
+            />
+            
+            <View style={styles.modalButtons}>
+              <Button 
+                title="Pular" 
+                onPress={() => handleBeneficiarioAction(false)} 
+                color="#6c757d"
+              />
+              <Button 
+                title="Salvar" 
+                onPress={() => handleBeneficiarioAction(true)}
+                disabled={!newBeneficiarioName.trim()}
+                color="#28a745"
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <View style={styles.controlsContainer}>
         <Button 
           title={isScanning ? "Pausar Scanner" : "Continuar Scanner"} 

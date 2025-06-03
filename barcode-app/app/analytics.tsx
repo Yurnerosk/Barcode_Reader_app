@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Text, View, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { Text, View, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LineChart, BarChart } from 'react-native-chart-kit';
@@ -18,6 +18,7 @@ interface BarcodeResult {
     valor?: number;
     dataVencimento?: string;
     beneficiario?: string;
+    nomeBeneficiario?: string; // Adicionado o nome do beneficiário
     dataLeitura?: string;
   };
 }
@@ -36,6 +37,7 @@ interface AggregatedData {
 }
 
 export default function AnalyticsScreen() {
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [boletosData, setBoletosData] = useState<BarcodeResult[]>([]);
   const [analyticsData, setAnalyticsData] = useState<AggregatedData>({
@@ -47,6 +49,7 @@ export default function AnalyticsScreen() {
   const [selectedFilter, setSelectedFilter] = useState<string>('banco');
   const [selectedPeriod, setSelectedPeriod] = useState<string>('all');
   const [selectedBanco, setSelectedBanco] = useState<string>('all');
+  
   
   const screenWidth = Dimensions.get('window').width - 30;
 
@@ -88,6 +91,19 @@ export default function AnalyticsScreen() {
       console.error('Erro ao carregar boletos:', error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const refreshData = async () => {
+    try {
+      setIsRefreshing(true);
+      await loadBoletosData();
+      Alert.alert("Sucesso", "Dados atualizados com sucesso!");
+    } catch (error) {
+      console.error('Erro ao atualizar dados:', error);
+      Alert.alert("Erro", "Falha ao atualizar os dados");
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -166,6 +182,7 @@ export default function AnalyticsScreen() {
           codigoBanco,
           valor = 0,
           beneficiario,
+          nomeBeneficiario, // Adicione esta linha
           dataVencimento,
           dataLeitura
         } = boleto.boletoDetails;
@@ -175,9 +192,22 @@ export default function AnalyticsScreen() {
           totalPorBanco[codigoBanco] = (totalPorBanco[codigoBanco] || 0) + valor;
         }
         
-        // Agrega por beneficiário
-        if (beneficiario && valor) {
-          const benefName = beneficiario.split(' - ')[0] || beneficiario;
+        // Agrega por beneficiário - ATUALIZADO para usar nome do beneficiário quando disponível
+        if (valor) {
+          // Verifica se tem nome do beneficiário cadastrado
+          let benefName: string;
+          
+          if (nomeBeneficiario) {
+            // Usa o nome cadastrado pelo usuário
+            benefName = nomeBeneficiario;
+          } else if (beneficiario) {
+            // Caso não tenha nome cadastrado, tenta extrair o nome do campo beneficiario
+            benefName = beneficiario.split(' - ')[0] || beneficiario;
+          } else {
+            // Fallback se não tiver nenhuma informação de beneficiário
+            benefName = 'Desconhecido';
+          }
+          
           totalPorBeneficiario[benefName] = (totalPorBeneficiario[benefName] || 0) + valor;
         }
         
@@ -336,7 +366,24 @@ export default function AnalyticsScreen() {
 
   return (
     <ScrollView style={styles.container}>
-      <Text style={styles.title}>Análise de Boletos</Text>
+      {/* <Text style={styles.title}>Análise de Boletos</Text> */}
+
+      <View style={styles.headerContainer}>
+        <Text style={styles.title}>Análise de Boletos</Text>
+        
+        <TouchableOpacity 
+          style={styles.refreshButton}
+          onPress={refreshData}
+          disabled={isRefreshing}
+        >
+          {isRefreshing ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Ionicons name="refresh" size={20} color="#fff" />
+          )}
+        </TouchableOpacity>
+      </View>
+
 
       {/* Card com valor total */}
       <View style={styles.totalCard}>
@@ -572,25 +619,28 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     color: '#444',
   },
-  filterRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 5,
-  },
-  filterLabel: {
-    width: 80,
-    fontSize: 14,
-    color: '#555',
-  },
+
   pickerContainer: {
     flex: 1,
     borderWidth: 1,
     borderColor: '#ddd',
     borderRadius: 5,
     overflow: 'hidden',
+    height:60, // Reduzido de 40 para 36
   },
   picker: {
-    height: 40,
+    height: 60, // Reduzido de 40 para 36
+    fontSize: 12, // Adicionado tamanho de fonte menor
+  },
+  filterLabel: {
+    width: 80,
+    fontSize: 13, // Reduzido de 14 para 13
+    color: '#555',
+  },
+  filterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 4, // Reduzido de 5 para 4
   },
   chartContainer: {
     backgroundColor: '#fff',
@@ -677,5 +727,26 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: 'bold',
     color: '#28a745',
+  },
+
+  headerContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  
+  refreshButton: {
+    backgroundColor: '#28a745',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
   },
 });
